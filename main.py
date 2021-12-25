@@ -1,33 +1,44 @@
-import connectDb
+#github page: https://github.com/ardakmese/nft-database
+#author: Arda Akmeşe
+
 import mysql.connector
-import sys
+import time
 
 query_seller = "select satici_adi, satici_soyadı from satici;"
-query_nft = "select urun_adi from nfturun;"
+query_nft = "select urun_adi, urun_fiyat, parabirim.ParaBirim " \
+            "from nfturun inner join parabirim on " \
+            "nfturun.urun_para_birim = parabirim.id;"
+
 query_completed_sell = "select* from satış;"
-query_insert_cuzdan = "insert into Cuzdan values (NULL,{0},{1},NULL)"
-query_insert_alici = "insert into Musteri values (NULL, %s, %s, %s, %s)"
+query_insert_cuzdan = "insert into Cuzdan values (NULL,{0},{1},NULL);"
+query_insert_alici = "insert into Musteri values (NULL, %s, %s, %s, %s);"
 query_fetch_cuzdan = "select* from Cuzdan;"
 
-query_find_owner = "select cuzdan.id \
-			from (SELECT * FROM cuzdan) as czdan \
-    		inner join satici on satici.cuzdan_id = czdan.id \
-    		inner join nfturun on czdan.nft_urun_id = nfturun.id \
-    		where nfturun.urun_adi = %s"
+query_find_musteri = "select Musteri.id from Musteri where Musteri.musteri_adi = {};"
+
+query_cuzdan_detail = "select* from Cuzdan where Cuzdan.id = {};"
+
+query_find_owner = "select cuzdan.id from cuzdan " \
+                   "inner join satici on satici.cuzdan_id = cuzdan.id " \
+                   "inner join nfturun on cuzdan.nft_urun_id = nfturun.id where nfturun.urun_adi = {};"
+
+query_owner_id = "select satici.id from satici where satici.cuzdan_id = {} ;"
+
+query_find_how_much = "select nfturun.urun_fiyat from nfturun where nfturun.urun_adi = {};"
 
 query_update_satici = "UPDATE cuzdan \
 SET cuzdan.nft_urun_id = NULL, cuzdan.para_miktari = cuzdan.para_miktari + {0} \
-WHERE cuzdan.id = {1}"
+WHERE cuzdan.id = {1};"
 
 query_update_alici = "UPDATE cuzdan \
 SET cuzdan.nft_urun_id = {0}, cuzdan.para_miktari = cuzdan.para_miktari - {1} \
-WHERE cuzdan.id = {2}"
+WHERE cuzdan.id = {2};"
 
-query_insert_satiş = "insert into Satış values (NULL,{},{},{},{},{},{}, %s)"
+query_insert_satiş = "insert into Satış values (NULL,{},{},{},{},{},{},{});"
 
 
 currency = ["btc","eth","doge","abc"]
-nft_list = {}
+nft_list = []
 
 
 def updateNftList():
@@ -42,7 +53,7 @@ def updateNftList():
     cursor.execute(query_nft)
     result = cursor.fetchall()
     for row in result:
-        print(row)
+        nft_list.append(str(row[0]))
 
 
 def showInDb(input):
@@ -81,32 +92,62 @@ def insertUser():
                                          password='12345678',
                                          auth_plugin='mysql_native_password'
                                          )
-    cursor = connection.cursor()
-    cursor.execute(query_insert_cuzdan.format(amount,currency.index(user_c)+1),multi=True)
+    cursor = connection.cursor(buffered=True)
+    cursor.execute(query_insert_cuzdan.format(amount,currency.index(user_c)+1))
     connection.commit()
     cursor.execute(query_fetch_cuzdan)
-    cuzdanSize = len(cursor.fetchall()) + 1
-    cursor.execute(query_insert_alici, (user,lastname,mail,cuzdanSize))
+    musteriCuzdan = int(len(cursor.fetchall()))
+    cursor.execute(query_insert_alici, (user,lastname,mail,musteriCuzdan) )
     connection.commit()
 
     print("Yeni müşteri {0} adıyla başarıyla tabloya eklendi.".format(user))
 
     updateNftList()
-    print(tw)
+    print(nft_list)
+
     userResponse = input("Lütfen gösterilen ürünlerden almak istediğiniz ürünü giriniz: ")
     while not nft_list.__contains__(userResponse):
         print(nft_list)
         userResponse = input("Yanlış girdiniz, lütfen gösterilen ürünlerden almak istediğiniz ürünü giriniz: ")
 
+    cursor.execute(query_find_owner.format("'"+userResponse+"'"))
+    res = cursor.fetchone()
+    owner_id = res[0]
 
-    #
-    # if
-    #     pass
-    # elif amount < kullanıcı parası
-    #     pass
-    # else:
-    #     print("Nft ürününüz hayırlı uğurlu olsun :)")
-    #     showInDb(query_completed_sell)
+    cursor.execute(query_cuzdan_detail.format(owner_id))
+    res = cursor.fetchall()
+    owner_money_id = res[0][2]
+    owner_nft_id = res[0][3]
+
+    cursor.execute(query_owner_id.format(owner_id))
+    res = cursor.fetchone()
+    satici_id = res[0]
+
+    cursor.execute(query_find_how_much.format("'"+userResponse+"'"))
+    res = cursor.fetchone()
+    current_price = res[0]
+
+    if owner_money_id != currency.index(user_c)+1:
+        print("Üzgünüz para birimleri uyuşmuyor, ürün satış birimi: "+ currency[owner_money_id-1]
+              + " cüzdanınızdaki birim: "+ user_c)
+    elif int(amount) < int(current_price):
+        print("Üzgünüz almak istediğiniz item fiyatı: " + str(current_price) +
+              " hesabınızdaki nakit: "+ str(amount) )
+    else:
+        cursor.execute(query_find_musteri.format("'"+user+"'"))
+        res = cursor.fetchone()
+        musteri_id = res[0]
+        zaman = "'"+ time.strftime('%Y-%m-%d %H:%M:%S') + "'"
+
+        cursor.execute(query_update_satici.format(current_price, owner_id))
+        connection.commit()
+        cursor.execute(query_update_alici.format(owner_nft_id, current_price, musteriCuzdan))
+        connection.commit()
+        cursor.execute(query_insert_satiş.format(current_price,owner_money_id,owner_nft_id,1,musteri_id,satici_id,zaman))
+        connection.commit()
+        print("Nft ürününüz hayırlı uğurlu olsun :)")
+
+        showInDb(query_completed_sell)
 
     startUp()
 
